@@ -1,0 +1,8 @@
+&title=Original Demo
+&artist=Original
+&first=0.000
+&des=Your Name
+&inote_5=
+(120){4}1,2,3,4,
+1/5,2h[4:1],C,1-4[8:3],
+E
