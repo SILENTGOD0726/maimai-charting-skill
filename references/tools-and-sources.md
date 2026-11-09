@@ -1,25 +1,50 @@
-# 工具与来源：不要混淆三层验证
+# 工具、来源与证据
 
-## 可信规则来源
+## 基础来源
 
-1. simai 原作者 Celeca 的公开 Wiki：<https://w.atwiki.jp/simai/pages/1002.html>。原生记法规则优先采用该页；本 Skill 的语法速查为重新整理、并非全量复制。
-2. Agent Skills 规范：<https://agentskills.io/specification>。需要 `SKILL.md` 及 YAML `name` / `description`。
-3. GitHub Copilot Skills 安装指南：<https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/customize-cloud-agent/add-skills>。
+- [Celeca原生Simai规范](https://w.atwiki.jp/simai/pages/1002.html)：语法主要依据，扩展与目标引擎支持另验。
+- [Majdata写谱教程](https://github.com/LingFeng-bbben/MajdataView/wiki/怎样写谱？)：制作实践；注意年代和实际版本。
+- [Agent Skills规范](https://agentskills.io/specification)：技能入口与资源组织。
+- [GitHub Copilot安装文档](https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/customize-cloud-agent/add-skills)：对应平台安装方式。
 
-## 可选第三方实现（需自行安装并核对版本）
+参考谱与视频来源见[研究方法](reference-study.md)。社区教程和逆向模型不是SEGA公开内部判定规范；先确认其版本和适用范围。
 
-- `lcebot/maidata-parser`：<https://github.com/lcebot/maidata-parser>。仓库文档介绍将 `maidata.txt` / 单谱 simai 转换为 `.ma2`，报告格式错误及部分可玩性冲突。其验证规则**是该项目的实现**，不等于官方标准；某些合法的 simai 高级用法也可能因目标引擎或版本不受支持。
-- `Shikochin/simai-sharp-ts`：<https://github.com/Shikochin/simai-sharp-ts>。TypeScript 的 simai 解析与序列化实现，可用于工程性 round-trip 测试。README 与实际版本功能如不一致，以实际运行结果为准。
-- 如有其他编辑器/模拟器（例如 AstroDX），以目标版本的文档和真实导入结果作为兼容性依据，不能凭 “simai” 三个字就保证全支持。
+## 工具角色
 
-## 三层验证
+| 工具 | 适合做什么 | 注意 |
+|---|---|---|
+| 自带quick_lint.py | 基础结构、已识别时值和时间指令顺序 | 不完整解析，不计算长音尾覆盖 |
+| [lcebot/maidata-parser](https://github.com/lcebot/maidata-parser) | 解析、转ma2及该项目实现的检查 | 原生高级用法与目标引擎支持需核对 |
+| [simai-sharp-ts](https://github.com/Shikochin/simai-sharp-ts) | 解析与序列化、工程性往返检查 | 往返一致不等于音乐或手感正确 |
+| [MaiMuriDX](https://github.com/Minepig/MaiMuriDX) | 特定预设动作与判定模型下的静态/动态风险筛查 | 留存代码版本与实际配置，不代表完整人体动作 |
+| 目标编辑器/播放器 | 真实导入、画面、速度、时序和遮挡 | 自动播放不等于真人试玩 |
+| 实际玩家/手元 | 身体动作、读谱、体力及主观体验 | 记录玩家、平台/版本、片段和反馈 |
 
-1. **快检**：`python scripts/quick_lint.py ./maidata.txt`。仅检测文件结构、末尾 `E`、括号/部分时值等；不是完整解析器。
-2. **语法/兼容**：用目标工具导入，或运行第三方 parser。注意可能存在原生语法支持差异。
-3. **实际体验**：查音画同步、星形 SLIDE 起步等待、TOUCH 位置、区域冲突、视觉遮挡、难度手感。
+这些工具均为可选项，不自动下载或安装。无法运行时标为未执行；不编造输出、版本或成功状态。不要强制用不支持某项语法的工具证明格式非法。
 
-最终报告须分别给出上述三层是否执行。没有做的保持“未验证”。
+## 分开记录六类证据
 
-## Ponytail 约束
+1. 音乐与时间：实际听辨和核对的声部、拍点、偏移、落点；自动分析结果与人工确认分开。
+2. 结构快检：文件结构、支持的时值形式与顺序。零错误可能仍有警告或未知语法。
+3. 完整解析/目标导入：记录工具、版本、文件和结果；跨引擎不自动外推。
+4. 连续动作与感应：记录上下文、两手候选方案、检测模型与参数、关联区域及人工解释。
+5. 视觉预览：实际观察的位置、速度、遮挡与启动引导。抽帧仅证明抽到的位置。
+6. 真人试玩：玩家、平台、具体反馈及修改后复验；模拟器自动输入与实际玩家分开。
 
-可配合 <https://github.com/DietrichGebert/ponytail> 贯彻：先复用已有解析器，只编写任务确实需要的最小脚本；但不要删减会造成隐性错误的测试与验收。它是**独立 Skill**，不是本 Skill 的运行依赖。
+每项写“已执行、结果、剩余问题”或“未执行及原因”。引用其他聊天结论时不冒充本次重新验证。没有条件完成其中一项，不妨碍完成已授权且可执行的部分，但交付标签保持准确。
+
+## 快检命令
+
+在技能根目录运行：
+
+~~~bash
+python scripts/quick_lint.py path/to/maidata.txt
+python -m unittest discover -s tests -v
+~~~
+
+返回码0：没有ERROR，但可能有WARN；1：有ERROR；2：输入无法读取。未知时值给WARN，不宣称已识别。检查器不识别引擎私有注释；带注释的源文件交给支持该格式的解析器，或用确认不改变谱意的导出副本检查。
+
+## 最小实现
+
+优先已有工具和标准库，不为几个规则创建完整解析器。Ponytail是可配合的独立技能，不是本技能运行依赖。参数调整要有明确校准依据，不能为清空报告而放宽手掌半径或判定模型。
+

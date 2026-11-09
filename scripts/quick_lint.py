@@ -1,33 +1,31 @@
 #!/usr/bin/env python3
-"""Conservative structural lint for native simai / maidata text.
+"""Conservative simai/maidata structural lint; Python 3.9+, standard library only.
 
-NOT a full simai grammar parser; success does not certify playability.
-Python 3.9+, no external dependencies.
+Checks supported time forms and control ordering. Does not check geometry,
+end-time coverage, audio alignment, sensor conflicts, difficulty or playability.
 """
-
 from __future__ import annotations
 
 import argparse
+import math
 import re
 from pathlib import Path
 
 FIELD = re.compile(r"(?m)^[ \t]*&([A-Za-z][A-Za-z0-9_]*)=(.*)$")
-NUM = r"(?:\d+(?:\.\d+)?)"
+NUMBER = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
 
 
 def sections(text: str) -> tuple[list[tuple[str, str]], list[str]]:
     fields = list(FIELD.finditer(text))
-    issues: list[str] = []
     if not fields:
-        return [("chart", text)], issues
-    seen: set[str] = set()
-    charts: list[tuple[str, str]] = []
+        return [("chart", text)], []
+    seen, charts, issues = set(), [], []
     for index, match in enumerate(fields):
         name = match.group(1)
         if name in seen:
-            issues.append(f"WARN duplicate field '&{name}=' (first-match semantics may apply)")
+            issues.append(f"WARN duplicate field '&{name}=' (engine behavior may differ)")
         seen.add(name)
-        if name.startswith("inote_"):
+        if re.fullmatch(r"inote_\d+", name):
             after = fields[index + 1].start() if index + 1 < len(fields) else len(text)
             charts.append((name, text[match.start(2):after]))
     if not charts:
@@ -36,9 +34,8 @@ def sections(text: str) -> tuple[list[tuple[str, str]], list[str]]:
 
 
 def check_balanced(source: str) -> list[str]:
-    stack: list[tuple[str, int]] = []
+    stack, issues = [], []
     pairs = {')': '(', ']': '[', '}': '{'}
-    issues = []
     for index, char in enumerate(source):
         if char in "([{":
             stack.append((char, index))
@@ -52,78 +49,146 @@ def check_balanced(source: str) -> list[str]:
     return issues
 
 
-def _positive(raw: str) -> bool:
-    try:
-        return float(raw) > 0
-    except ValueError:
+def valid_number(raw: str, allow_zero: bool = False) -> bool:
+    if not re.fullmatch(NUMBER, raw.strip()):
         return False
+    value = float(raw)
+    return math.isfinite(value) and (value >= 0 if allow_zero else value > 0)
+
+
+def duration_issues(inner: str) -> list[str]:
+    """Validate numeric roles in documented time forms, not note-type legality."""
+    inner = inner.strip()
+    parts, tail = [], inner
+    unknown = [f"WARN unrecognized duration '[{inner}]'; verify with full parser"]
+    if "##" in tail:
+        wait, tail = tail.split("##", 1)
+        if not re.fullmatch(NUMBER, wait):
+            return unknown
+        parts.append(("slide wait", wait, True))
+    if "#" in tail:
+        bpm, tail = tail.split("#", 1)
+        if bpm:
+            if not re.fullmatch(NUMBER, bpm):
+                return unknown
+            parts.append(("duration BPM", bpm, False))
+        elif "##" in inner or ":" in tail:
+            return unknown
+    if ":" in tail:
+        pair = tail.split(":")
+        if len(pair) != 2 or not all(re.fullmatch(NUMBER, p) for p in pair):
+            return unknown
+        parts.extend([("length divider", pair[0], False), ("duration count", pair[1], False)])
+    elif re.fullmatch(NUMBER, tail):
+        if "#" not in inner:
+            return unknown
+        parts.append(("duration seconds", tail, False))
+    else:
+        return unknown
+    return [f"ERROR invalid {role} '{raw}' in '[{inner}]'"
+            for role, raw, zero in parts if not valid_number(raw, zero)]
+
+
+def check_sequence(source: str) -> list[str]:
+    issues, cell = [], []
+    bpm_known, absolute_grid, saw_note, ended = False, False, False, False
+
+    def flush():
+        nonlocal saw_note, ended
+        token = ''.join(cell).strip()
+        cell.clear()
+        if not token:
+            return
+        if ended:
+            issues.append("ERROR content appears after E terminator")
+        elif token == 'E':
+            ended = True
+        else:
+            if not saw_note and not (bpm_known or absolute_grid):
+                issues.append("WARN no explicit initial BPM or seconds grid before first note; verify engine defaults")
+            saw_note = True
+
+    i = 0
+    while i < len(source):
+        ch = source[i]
+        if ch in '({[':
+            close = {'(': ')', '{': '}', '[': ']'}[ch]
+            j = source.find(close, i + 1)
+            if j == -1:
+                break  # check_balanced reports the missing delimiter.
+            value = source[i + 1:j].strip()
+            if ch == '[':
+                cell.append(source[i:j + 1])
+            else:
+                token = ''.join(cell).strip()
+                if ended or token == 'E':
+                    issues.append("ERROR timing instruction appears after E terminator")
+                if token not in ('', 'E'):
+                    issues.append("WARN timing instruction inside a note cell; verify with full parser")
+                if ch == '(':
+                    if not valid_number(value):
+                        issues.append(f"ERROR invalid BPM '({value})'")
+                    else:
+                        bpm_known = True
+                else:
+                    absolute_grid = value.startswith('#')
+                    number = value[1:] if absolute_grid else value
+                    if not valid_number(number):
+                        issues.append(f"ERROR invalid timing grid '{{{value}}}'")
+                    elif not absolute_grid and not bpm_known:
+                        issues.append("WARN relative timing grid appears before BPM; verify engine defaults")
+            i = j + 1
+            continue
+        if ch == ',':
+            flush()
+        else:
+            cell.append(ch)
+        i += 1
+    flush()
+    if not ended:
+        issues.append("ERROR missing final E terminator")
+    if not saw_note:
+        issues.append("WARN chart has no notes")
+    return list(dict.fromkeys(issues))
 
 
 def lint_chart(body: str) -> list[str]:
-    issues: list[str] = []
     clean = body.strip()
     if not clean:
         return ["ERROR empty chart"]
-    issues.extend(check_balanced(clean))
-    if not re.search(r"E\s*$", clean):
-        issues.append("ERROR missing final E terminator")
-    else:
-        clean = re.sub(r"E\s*$", "", clean)
-    if not clean.strip(" ,\n\t"):
-        issues.append("WARN chart has no notes or timing instructions")
-    if re.search(r"(?:^|,)\s*E\s*,", clean):
-        issues.append("ERROR E appears before the final chart position")
-    if not re.search(r"\(\s*" + NUM + r"\s*\)|\{\s*#?" + NUM + r"\s*\}", clean):
-        issues.append("WARN no explicit initial BPM or timing grid; target-engine default may differ")
-    if "//" in clean:
-        issues.append("WARN '//' text is not guaranteed to be a simai comment; check target parser")
-    for m in re.finditer(r"\(([^()]*)\)", clean):
-        if not _positive(m.group(1).strip()):
-            issues.append(f"ERROR invalid BPM '({m.group(1)})'")
-    for m in re.finditer(r"\{([^{}]*)\}", clean):
-        content = m.group(1).strip().removeprefix('#')
-        if not _positive(content):
-            issues.append(f"ERROR invalid timing grid '{{{m.group(1)}}}'")
+    issues = check_balanced(clean) + check_sequence(clean)
+    if '//' in clean or '||' in clean:
+        issues.append("WARN comment-like text detected; this checker does not interpret engine-specific comments")
     for m in re.finditer(r"\[([^\[\]]*)\]", clean):
-        inner = m.group(1).strip()
-        # Recognize the common time forms only; don't reject unfamiliar extensions.
-        pieces = re.findall(NUM, inner)
-        if not pieces:
-            issues.append(f"WARN unrecognized duration '[{inner}]'; verify with full parser")
-        elif any(not _positive(v) for v in pieces):
-            issues.append(f"ERROR nonpositive duration component '[{inner}]'")
-        if re.fullmatch(r"\d+(?:\.\d+)?:0+(?:\.0+)?", inner):
-            issues.append(f"ERROR zero count in duration '[{inner}]'")
+        issues.extend(duration_issues(m.group(1)))
     if re.search(r"(?<!\d)\b0h|\b9h", clean):
         issues.append("WARN possible invalid button index in HOLD; verify with full parser")
-    return issues
+    return list(dict.fromkeys(issues))
 
 
 def lint(text: str) -> list[str]:
-    found, global_issues = sections(text.lstrip("\ufeff"))
-    result = list(global_issues)
-    for label, body in found:
-        result.extend(f"{label}: {problem}" for problem in lint_chart(body))
-    return result
+    found, issues = sections(text.lstrip('\ufeff'))
+    return issues + [f"{label}: {problem}" for label, body in found for problem in lint_chart(body)]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("file", type=Path, help="UTF-8 maidata.txt or raw simai chart")
+    parser.add_argument('file', type=Path, help='UTF-8 maidata.txt or raw simai chart')
     args = parser.parse_args()
     try:
-        text = args.file.read_text(encoding="utf-8-sig")
+        text = args.file.read_text(encoding='utf-8-sig')
     except (OSError, UnicodeDecodeError) as exc:
         print(f"ERROR cannot read input: {exc}")
         return 2
     problems = lint(text)
     for problem in problems:
         print(problem)
-    errors = sum("ERROR" in problem for problem in problems)
-    warns = sum("WARN" in problem for problem in problems)
+    errors = sum('ERROR' in p for p in problems)
+    warns = sum('WARN' in p for p in problems)
     print(f"Structural lint: {errors} error(s), {warns} warning(s). Not a full parser or playtest.")
     return 1 if errors else 0
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     raise SystemExit(main())
+
